@@ -1,43 +1,20 @@
 import path from 'node:path';
-import type { RepoFile } from './github.js';
-import type {
-  AnalysisResponse,
-  DominoEdge,
-  DominoNode,
-  HealthGrade,
-  PrInfo,
-  RiskLevel,
-} from './types.js';
+import type { FileChurnStats, RepoFile } from './github.js';
+import type { AnalysisResponse, DominoEdge, DominoNode, RiskLevel } from './types.js';
 
-function calculateRisk(totalImpact: number, totalFiles: number): RiskLevel {
+function calculateRisk(totalImpact: number, totalFiles: number, commitCount: number): RiskLevel {
   const ratio = totalFiles > 1 ? totalImpact / (totalFiles - 1) : 0;
-  if (totalImpact >= 8 || ratio >= 0.25) return 'critical';
-  if (totalImpact >= 4 || ratio >= 0.12) return 'high';
-  if (totalImpact >= 1) return 'medium';
+  if (totalImpact >= 8 || ratio >= 0.25 || (totalImpact >= 4 && commitCount >= 4)) return 'critical';
+  if (totalImpact >= 4 || ratio >= 0.12 || commitCount >= 3) return 'high';
+  if (totalImpact >= 1 || commitCount >= 1) return 'medium';
   return 'low';
 }
 
-function calculateArchitectureHealth(
-  nodes: DominoNode[],
-  circularCount: number
-): { healthScore: number; healthGrade: HealthGrade } {
-  const total = Math.max(nodes.length, 1);
-  const criticalCount = nodes.filter((n) => n.risk === 'critical').length;
-  const highCount = nodes.filter((n) => n.risk === 'high').length;
-
-  let score = 100;
-  score -= circularCount * 16;
-  score -= Math.round((criticalCount / total) * 55);
-  score -= Math.round((highCount / total) * 25);
-
-  const healthScore = Math.max(15, Math.min(100, score));
-  let healthGrade: HealthGrade = 'F';
-  if (healthScore >= 85) healthGrade = 'A';
-  else if (healthScore >= 70) healthGrade = 'B';
-  else if (healthScore >= 55) healthGrade = 'C';
-  else if (healthScore >= 40) healthGrade = 'D';
-
-  return { healthScore, healthGrade };
+function calculateDangerScore(totalImpact: number, commitCount: number, authorCount: number): number {
+  const impactPoints = Math.min(55, totalImpact * 7);
+  const churnPoints = Math.min(35, commitCount * 9);
+  const busFactorBonus = totalImpact >= 2 && commitCount >= 2 && authorCount === 1 ? 10 : 0;
+  return Math.min(100, impactPoints + churnPoints + busFactorBonus);
 }
 
 export function buildDominoGraph(
@@ -46,7 +23,8 @@ export function buildDominoGraph(
   branch: string,
   files: RepoFile[],
   importedByMap: Map<string, Set<string>>,
-  prInfo?: PrInfo
+  churnMap: Map<string, FileChurnStats>,
+  analyzedCommits: number
 ): AnalysisResponse {
   const reachability = new Map<string, Set<string>>();
   const directMap = new Map<string, string[]>();
@@ -79,22 +57,13 @@ export function buildDominoGraph(
   }
 
   const edges: DominoEdge[] = [];
-  const circularPartnersMap = new Map<string, Set<string>>();
-  for (const file of files) {
-    circularPartnersMap.set(file.path, new Set());
-  }
-
-  let circularEdgeCount = 0;
+  let circularCount = 0;
   let edgeIndex = 1;
 
   for (const [source, targets] of importedByMap.entries()) {
     for (const target of targets) {
       const isCircular = reachability.get(target)?.has(source) ?? false;
-      if (isCircular) {
-        circularEdgeCount++;
-        circularPartnersMap.get(source)?.add(target);
-        circularPartnersMap.get(target)?.add(source);
-      }
+      if (isCircular) circularCount++;
 
       edges.push({
         id: `e-${edgeIndex++}`,
@@ -113,32 +82,42 @@ export function buildDominoGraph(
     const label = path.posix.basename(file.path);
     const extension = label.includes('.') ? label.split('.').pop()! : '';
 
+    const churn = churnMap.get(file.path);
+    const commitCount = churn?.commitCount ?? 0;
+    const topAuthor = churn?.topAuthor ?? '—';
+    const authorCount = churn?.authorCount ?? 0;
+    const lastModifiedDays = churn?.lastModifiedDays ?? null;
+    const dangerScore = calculateDangerScore(totalImpact, commitCount, authorCount);
+
     return {
       id: file.path,
       label,
       folder: folder === '.' ? '/' : folder,
       extension,
       lines: file.content.split('\n').length,
-      risk: calculateRisk(totalImpact, files.length),
+      risk: calculateRisk(totalImpact, files.length, commitCount),
       directDependents,
       indirectDependents,
-      circularPartners: Array.from(circularPartnersMap.get(file.path) ?? []),
       totalImpact,
+      commitCount,
+      topAuthor,
+      authorCount,
+      lastModifiedDays,
+      dangerScore,
     };
   });
 
-  const circularCount = Math.floor(circularEdgeCount / 2);
-  const { healthScore, healthGrade } = calculateArchitectureHealth(nodes, circularCount);
-
   const hotspots = [...nodes]
-    .filter((n) => n.totalImpact > 0)
-    .sort((a, b) => b.totalImpact - a.totalImpact)
+    .filter((n) => n.totalImpact > 0 || n.commitCount > 0)
+    .sort((a, b) => b.dangerScore - a.dangerScore || b.totalImpact - a.totalImpact)
     .slice(0, 5)
     .map((n) => ({
       id: n.id,
       label: n.label,
       directCount: n.directDependents.length,
       totalImpact: n.totalImpact,
+      commitCount: n.commitCount,
+      dangerScore: n.dangerScore,
       risk: n.risk,
     }));
 
@@ -148,11 +127,9 @@ export function buildDominoGraph(
       name,
       branch,
       totalFiles: files.length,
-      circularCount,
-      healthScore,
-      healthGrade,
+      circularCount: Math.floor(circularCount / 2),
+      analyzedCommits,
     },
-    prInfo,
     hotspots,
     nodes,
     edges,

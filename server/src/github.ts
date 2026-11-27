@@ -1,8 +1,13 @@
-import type { PrInfo } from './types.js';
-
 export interface RepoFile {
   path: string;
   content: string;
+}
+
+export interface FileChurnStats {
+  commitCount: number;
+  topAuthor: string;
+  authorCount: number;
+  lastModifiedDays: number | null;
 }
 
 const ALLOWED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.dart', '.py']);
@@ -21,34 +26,17 @@ const IGNORED_SEGMENTS = [
   'windows/',
   'linux/',
   'web/',
-  'test/',
-  'tests/',
-  '__tests__/',
-  'examples/',
-  'example/',
-  'docs/',
-  'benchmark/',
 ];
 
 const MAX_FILES = 85;
 
-export function parseGitHubUrl(inputUrl: string): {
-  owner: string;
-  repo: string;
-  prNumber?: number;
-} {
-  const cleaned = inputUrl.trim().replace(/\.git$/, '').replace(/\/$/, '');
-  const match = cleaned.match(/github\.com\/([^/]+)\/([^/]+)(?:\/pull\/(\d+))?/i);
+export function parseGitHubUrl(repoUrl: string): { owner: string; repo: string } {
+  const cleaned = repoUrl.trim().replace(/\.git$/, '').replace(/\/$/, '');
+  const match = cleaned.match(/github\.com\/([^/]+)\/([^/]+)/i);
   if (!match) {
-    throw new Error(
-      'Geçersiz GitHub URL formatı. Örnek: https://github.com/kullanici/proje veya .../pull/123'
-    );
+    throw new Error('Geçersiz GitHub URL formatı. Örnek: https://github.com/kullanici/proje');
   }
-  return {
-    owner: match[1],
-    repo: match[2],
-    prNumber: match[3] ? Number(match[3]) : undefined,
-  };
+  return { owner: match[1], repo: match[2] };
 }
 
 function getHeaders(): Record<string, string> {
@@ -64,14 +52,6 @@ function getHeaders(): Record<string, string> {
 
 function isSourceFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
-  if (
-    lower.startsWith('test/') ||
-    lower.startsWith('tests/') ||
-    lower.startsWith('examples/') ||
-    lower.startsWith('docs/')
-  ) {
-    return false;
-  }
   if (IGNORED_SEGMENTS.some((seg) => lower.includes(seg))) return false;
   if (lower.includes('.test.') || lower.includes('.spec.') || lower.endsWith('.d.ts')) return false;
 
@@ -80,30 +60,105 @@ function isSourceFile(filePath: string): boolean {
   return ALLOWED_EXTENSIONS.has(lower.slice(dotIndex));
 }
 
-async function fetchPrMetadata(
+export async function fetchCommitHistory(
   owner: string,
   repo: string,
-  prNumber: number,
-  headers: Record<string, string>
-): Promise<{ title: string; rawChangedFiles: string[] }> {
-  const [prRes, filesRes] = await Promise.all([
-    fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, { headers }),
-    fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`, {
-      headers,
-    }),
-  ]);
+  branch: string,
+  knownPaths: Set<string>
+): Promise<{ churnMap: Map<string, FileChurnStats>; analyzedCommits: number }> {
+  const headers = getHeaders();
+  const commitLimit = process.env.GITHUB_TOKEN ? 18 : 6;
+  const churnMap = new Map<string, FileChurnStats>();
 
-  if (!prRes.ok || !filesRes.ok) {
-    throw new Error(`Pull Request #${prNumber} bilgisi alınamadı (${prRes.status}).`);
+  try {
+    const listRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/commits?sha=${branch}&per_page=${commitLimit}`,
+      { headers }
+    );
+    if (!listRes.ok) {
+      return { churnMap, analyzedCommits: 0 };
+    }
+
+    const commits = (await listRes.json()) as Array<{
+      sha: string;
+      commit?: { author?: { name?: string; date?: string } };
+      author?: { login?: string } | null;
+    }>;
+
+    const fileTrackers = new Map<
+      string,
+      { count: number; authors: Map<string, number>; latestDate: number | null }
+    >();
+
+    const batchSize = 6;
+    for (let i = 0; i < commits.length; i += batchSize) {
+      const batch = commits.slice(i, i + batchSize);
+      const details = await Promise.all(
+        batch.map(async (c) => {
+          const detailRes = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/commits/${c.sha}`,
+            { headers }
+          );
+          if (!detailRes.ok) return null;
+          return (await detailRes.json()) as {
+            commit?: { author?: { name?: string; date?: string } };
+            author?: { login?: string } | null;
+            files?: Array<{ filename: string }>;
+          };
+        })
+      );
+
+      for (const detail of details) {
+        if (!detail?.files) continue;
+        const authorName =
+          detail.author?.login || detail.commit?.author?.name || 'Bilinmiyor';
+        const dateStr = detail.commit?.author?.date;
+        const timestamp = dateStr ? new Date(dateStr).getTime() : null;
+
+        for (const f of detail.files) {
+          if (!knownPaths.has(f.filename)) continue;
+          const entry = fileTrackers.get(f.filename) ?? {
+            count: 0,
+            authors: new Map<string, number>(),
+            latestDate: null,
+          };
+          entry.count += 1;
+          entry.authors.set(authorName, (entry.authors.get(authorName) ?? 0) + 1);
+          if (timestamp && (!entry.latestDate || timestamp > entry.latestDate)) {
+            entry.latestDate = timestamp;
+          }
+          fileTrackers.set(f.filename, entry);
+        }
+      }
+    }
+
+    const now = Date.now();
+    for (const [filePath, tracker] of fileTrackers.entries()) {
+      let topAuthor = 'Bilinmiyor';
+      let maxAuthorCommits = -1;
+      for (const [author, count] of tracker.authors.entries()) {
+        if (count > maxAuthorCommits) {
+          maxAuthorCommits = count;
+          topAuthor = author;
+        }
+      }
+
+      const lastModifiedDays = tracker.latestDate
+        ? Math.max(0, Math.floor((now - tracker.latestDate) / (1000 * 60 * 60 * 24)))
+        : null;
+
+      churnMap.set(filePath, {
+        commitCount: tracker.count,
+        topAuthor,
+        authorCount: tracker.authors.size,
+        lastModifiedDays,
+      });
+    }
+
+    return { churnMap, analyzedCommits: commits.length };
+  } catch {
+    return { churnMap, analyzedCommits: 0 };
   }
-
-  const prData = (await prRes.json()) as { title?: string };
-  const filesData = (await filesRes.json()) as Array<{ filename: string }>;
-
-  return {
-    title: prData.title || `Pull Request #${prNumber}`,
-    rawChangedFiles: filesData.map((f) => f.filename).filter(isSourceFile),
-  };
 }
 
 export async function fetchRepositoryFiles(repoUrl: string): Promise<{
@@ -111,9 +166,8 @@ export async function fetchRepositoryFiles(repoUrl: string): Promise<{
   repo: string;
   branch: string;
   files: RepoFile[];
-  prInfo?: PrInfo;
 }> {
-  const { owner, repo, prNumber } = parseGitHubUrl(repoUrl);
+  const { owner, repo } = parseGitHubUrl(repoUrl);
   const headers = getHeaders();
 
   const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
@@ -122,14 +176,6 @@ export async function fetchRepositoryFiles(repoUrl: string): Promise<{
   }
   const repoMeta = (await repoRes.json()) as { default_branch: string };
   const branch = repoMeta.default_branch || 'main';
-
-  let prTitle = '';
-  let prChangedSet = new Set<string>();
-  if (prNumber) {
-    const prMeta = await fetchPrMetadata(owner, repo, prNumber, headers);
-    prTitle = prMeta.title;
-    prChangedSet = new Set(prMeta.rawChangedFiles);
-  }
 
   const treeRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`,
@@ -146,10 +192,6 @@ export async function fetchRepositoryFiles(repoUrl: string): Promise<{
   const candidates = treeData.tree
     .filter((item) => item.type === 'blob' && isSourceFile(item.path))
     .sort((a, b) => {
-      const aInPr = prChangedSet.has(a.path) ? -1 : 0;
-      const bInPr = prChangedSet.has(b.path) ? -1 : 0;
-      if (aInPr !== bInPr) return aInPr - bInPr;
-
       const aPriority = /^(src|lib|app)\//.test(a.path) ? 0 : 1;
       const bPriority = /^(src|lib|app)\//.test(b.path) ? 0 : 1;
       return aPriority - bPriority;
@@ -175,14 +217,5 @@ export async function fetchRepositoryFiles(repoUrl: string): Promise<{
     }
   }
 
-  const loadedPaths = new Set(files.map((f) => f.path));
-  const prInfo: PrInfo | undefined = prNumber
-    ? {
-        number: prNumber,
-        title: prTitle,
-        changedFiles: Array.from(prChangedSet).filter((p) => loadedPaths.has(p)),
-      }
-    : undefined;
-
-  return { owner, repo, branch, files, prInfo };
+  return { owner, repo, branch, files };
 }
