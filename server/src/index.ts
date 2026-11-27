@@ -4,8 +4,8 @@ import dotenv from 'dotenv';
 import { fetchRepositoryFiles, type RepoFile } from './github.js';
 import { extractDependencies } from './parser.js';
 import { buildDominoGraph } from './graph.js';
-import { generateFileXRay } from './xray.js';
-import type { AnalysisResponse, XRayResponse } from './types.js';
+import { generateFileXRay, generatePrReview } from './xray.js';
+import type { AnalysisResponse, PrReviewResponse, XRayResponse } from './types.js';
 
 dotenv.config();
 
@@ -18,6 +18,7 @@ app.use(express.json());
 const analysisCache = new Map<string, AnalysisResponse>();
 const repoFilesCache = new Map<string, Map<string, RepoFile>>();
 const xrayCache = new Map<string, XRayResponse>();
+const prReviewCache = new Map<string, PrReviewResponse>();
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -41,9 +42,9 @@ app.post('/api/analyze', async (req, res) => {
       return;
     }
 
-    const { owner, repo, branch, files } = await fetchRepositoryFiles(repoUrl);
+    const { owner, repo, branch, files, prInfo } = await fetchRepositoryFiles(repoUrl);
     const importedByMap = extractDependencies(files);
-    const analysis = buildDominoGraph(owner, repo, branch, files, importedByMap);
+    const analysis = buildDominoGraph(owner, repo, branch, files, importedByMap, prInfo);
 
     const fileMap = new Map<string, RepoFile>();
     for (const f of files) fileMap.set(f.path, f);
@@ -65,6 +66,9 @@ app.post('/api/xray', async (req, res) => {
     const directDependents = Array.isArray(req.body?.directDependents)
       ? (req.body.directDependents as string[])
       : [];
+    const circularPartners = Array.isArray(req.body?.circularPartners)
+      ? (req.body.circularPartners as string[])
+      : [];
     const totalImpact = Number(req.body?.totalImpact ?? 0);
 
     if (!filePath) {
@@ -81,12 +85,51 @@ app.post('/api/xray', async (req, res) => {
     }
 
     const codeSnippet = repoFilesCache.get(repoKey)?.get(filePath)?.content ?? '';
-    const result = await generateFileXRay(filePath, codeSnippet, directDependents, totalImpact);
+    const result = await generateFileXRay(
+      filePath,
+      codeSnippet,
+      directDependents,
+      totalImpact,
+      circularPartners
+    );
 
     xrayCache.set(xrayKey, result);
     res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'X-Ray analizi başarısız oldu.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/pr-review', async (req, res) => {
+  try {
+    const prTitle = String(req.body?.prTitle ?? 'Çoklu Dosya Değişikliği').trim();
+    const changedFiles = Array.isArray(req.body?.changedFiles)
+      ? (req.body.changedFiles as string[])
+      : [];
+    const directCount = Number(req.body?.directCount ?? 0);
+    const indirectCount = Number(req.body?.indirectCount ?? 0);
+    const blastPercentage = Number(req.body?.blastPercentage ?? 0);
+    const circularCount = Number(req.body?.circularCount ?? 0);
+
+    const cacheKey = `${prTitle}::${changedFiles.sort().join(',')}`;
+    if (prReviewCache.has(cacheKey)) {
+      res.json(prReviewCache.get(cacheKey));
+      return;
+    }
+
+    const review = await generatePrReview(
+      prTitle,
+      changedFiles,
+      directCount,
+      indirectCount,
+      blastPercentage,
+      circularCount
+    );
+    prReviewCache.set(cacheKey, review);
+    res.json(review);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'PR analizi başarısız oldu.';
     res.status(500).json({ error: message });
   }
 });

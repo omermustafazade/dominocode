@@ -1,6 +1,13 @@
 import path from 'node:path';
 import type { RepoFile } from './github.js';
-import type { AnalysisResponse, DominoEdge, DominoNode, RiskLevel } from './types.js';
+import type {
+  AnalysisResponse,
+  DominoEdge,
+  DominoNode,
+  HealthGrade,
+  PrInfo,
+  RiskLevel,
+} from './types.js';
 
 function calculateRisk(totalImpact: number, totalFiles: number): RiskLevel {
   const ratio = totalFiles > 1 ? totalImpact / (totalFiles - 1) : 0;
@@ -10,12 +17,36 @@ function calculateRisk(totalImpact: number, totalFiles: number): RiskLevel {
   return 'low';
 }
 
+function calculateArchitectureHealth(
+  nodes: DominoNode[],
+  circularCount: number
+): { healthScore: number; healthGrade: HealthGrade } {
+  const total = Math.max(nodes.length, 1);
+  const criticalCount = nodes.filter((n) => n.risk === 'critical').length;
+  const highCount = nodes.filter((n) => n.risk === 'high').length;
+
+  let score = 100;
+  score -= circularCount * 16;
+  score -= Math.round((criticalCount / total) * 55);
+  score -= Math.round((highCount / total) * 25);
+
+  const healthScore = Math.max(15, Math.min(100, score));
+  let healthGrade: HealthGrade = 'F';
+  if (healthScore >= 85) healthGrade = 'A';
+  else if (healthScore >= 70) healthGrade = 'B';
+  else if (healthScore >= 55) healthGrade = 'C';
+  else if (healthScore >= 40) healthGrade = 'D';
+
+  return { healthScore, healthGrade };
+}
+
 export function buildDominoGraph(
   owner: string,
   name: string,
   branch: string,
   files: RepoFile[],
-  importedByMap: Map<string, Set<string>>
+  importedByMap: Map<string, Set<string>>,
+  prInfo?: PrInfo
 ): AnalysisResponse {
   const reachability = new Map<string, Set<string>>();
   const directMap = new Map<string, string[]>();
@@ -48,13 +79,22 @@ export function buildDominoGraph(
   }
 
   const edges: DominoEdge[] = [];
-  let circularCount = 0;
+  const circularPartnersMap = new Map<string, Set<string>>();
+  for (const file of files) {
+    circularPartnersMap.set(file.path, new Set());
+  }
+
+  let circularEdgeCount = 0;
   let edgeIndex = 1;
 
   for (const [source, targets] of importedByMap.entries()) {
     for (const target of targets) {
       const isCircular = reachability.get(target)?.has(source) ?? false;
-      if (isCircular) circularCount++;
+      if (isCircular) {
+        circularEdgeCount++;
+        circularPartnersMap.get(source)?.add(target);
+        circularPartnersMap.get(target)?.add(source);
+      }
 
       edges.push({
         id: `e-${edgeIndex++}`,
@@ -82,9 +122,13 @@ export function buildDominoGraph(
       risk: calculateRisk(totalImpact, files.length),
       directDependents,
       indirectDependents,
+      circularPartners: Array.from(circularPartnersMap.get(file.path) ?? []),
       totalImpact,
     };
   });
+
+  const circularCount = Math.floor(circularEdgeCount / 2);
+  const { healthScore, healthGrade } = calculateArchitectureHealth(nodes, circularCount);
 
   const hotspots = [...nodes]
     .filter((n) => n.totalImpact > 0)
@@ -104,8 +148,11 @@ export function buildDominoGraph(
       name,
       branch,
       totalFiles: files.length,
-      circularCount: Math.floor(circularCount / 2),
+      circularCount,
+      healthScore,
+      healthGrade,
     },
+    prInfo,
     hotspots,
     nodes,
     edges,
