@@ -2,6 +2,7 @@ import {
   Crosshair,
   Eye,
   EyeOff,
+  Flame,
   GitBranch,
   GitPullRequest,
   Layers,
@@ -20,6 +21,9 @@ interface TopBarProps {
   prInfo?: PrInfo;
   loading: boolean;
   onAnalyze: (url: string) => void;
+  onGoHome: () => void;
+  heatmapMode: boolean;
+  setHeatmapMode: React.Dispatch<React.SetStateAction<boolean>>;
   isolateImpact: boolean;
   setIsolateImpact: React.Dispatch<React.SetStateAction<boolean>>;
   multiPrMode: boolean;
@@ -45,6 +49,9 @@ export function TopBar({
   prInfo,
   loading,
   onAnalyze,
+  onGoHome,
+  heatmapMode,
+  setHeatmapMode,
   isolateImpact,
   setIsolateImpact,
   multiPrMode,
@@ -62,19 +69,24 @@ export function TopBar({
     <header className="h-15 border-b border-zinc-800/90 px-4 flex items-center justify-between gap-3 bg-zinc-950/95 backdrop-blur-md shrink-0 z-20">
       {/* Marka ve Aktif Repo Bilgisi */}
       <div className="flex items-center gap-3 shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-400/25 to-emerald-400/15 border border-cyan-400/40 flex items-center justify-center shadow-[0_0_15px_rgba(34,211,238,0.15)]">
+        <button
+          type="button"
+          onClick={onGoHome}
+          title="Giriş ekranına dön"
+          className="flex items-center gap-2.5 text-left cursor-pointer group"
+        >
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-400/25 to-emerald-400/15 border border-cyan-400/40 group-hover:border-cyan-300 flex items-center justify-center shadow-[0_0_15px_rgba(34,211,238,0.15)] transition">
             <Layers className="w-4 h-4 text-cyan-400" />
           </div>
           <div>
-            <div className="font-bold tracking-tight text-sm leading-none">
+            <div className="font-bold tracking-tight text-sm leading-none group-hover:text-cyan-200 transition">
               Domino<span className="text-cyan-400">Code</span>
             </div>
             <div className="text-[10px] text-zinc-500 mt-0.5 font-medium">
-              Mimari Etki X-Ray
+              Ana Ekrana Dön
             </div>
           </div>
-        </div>
+        </button>
 
         <div className="h-6 w-px bg-zinc-800 hidden xl:block" />
 
@@ -148,6 +160,20 @@ export function TopBar({
             );
           })}
         </div>
+
+        <button
+          type="button"
+          onClick={() => setHeatmapMode((prev) => !prev)}
+          title="Dosyaların commit sıklığına ve son değişiklik zamanına göre ısı haritasını açar"
+          className={`px-2.5 py-1.5 rounded-xl border flex items-center gap-1.5 cursor-pointer transition font-medium ${
+            heatmapMode
+              ? 'bg-gradient-to-r from-rose-500/25 to-orange-500/25 border-orange-400/70 text-orange-200 shadow-[0_0_15px_rgba(249,115,22,0.25)]'
+              : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+          }`}
+        >
+          <Flame className={`w-3.5 h-3.5 ${heatmapMode ? 'text-orange-400' : 'text-rose-400'}`} />
+          <span>Isı Haritası</span>
+        </button>
 
         <button
           type="button"

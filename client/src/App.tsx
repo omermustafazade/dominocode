@@ -17,6 +17,7 @@ import {
   type FileNodeData,
   type ImpactState,
 } from './components/FileNode';
+import { LandingScreen } from './components/LandingScreen';
 import { TopBar } from './components/TopBar';
 import { LeftSidebar } from './components/LeftSidebar';
 import { XRayDrawer } from './components/XRayDrawer';
@@ -31,7 +32,7 @@ function applyDagreLayout(nodes: CustomFileNode[], edges: Edge[]): CustomFileNod
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'LR', nodesep: 48, ranksep: 155 });
 
-  nodes.forEach((node) => g.setNode(node.id, { width: 232, height: 76 }));
+  nodes.forEach((node) => g.setNode(node.id, { width: 238, height: 78 }));
   edges.forEach((edge) => g.setEdge(edge.source, edge.target));
 
   dagre.layout(g);
@@ -40,15 +41,17 @@ function applyDagreLayout(nodes: CustomFileNode[], edges: Edge[]): CustomFileNod
     const pos = g.node(node.id);
     return {
       ...node,
-      position: { x: pos.x - 116, y: pos.y - 38 },
+      position: { x: pos.x - 119, y: pos.y - 39 },
     };
   });
 }
 
 function DominoWorkspace() {
-  const [repoUrl, setRepoUrl] = useState('https://github.com/dominocode/ecommerce-core');
+  const [hasStarted, setHasStarted] = useState(false);
+  const [repoUrl, setRepoUrl] = useState('');
   const [data, setData] = useState<AnalysisResponse>(DEMO_ANALYSIS);
   const [selectedIds, setSelectedIds] = useState<string[]>(['src/services/authService.ts']);
+  const [heatmapMode, setHeatmapMode] = useState(false);
   const [multiPrMode, setMultiPrMode] = useState(false);
   const [isolateImpact, setIsolateImpact] = useState(false);
   const [hideIsolated, setHideIsolated] = useState(true);
@@ -82,6 +85,8 @@ function DominoWorkspace() {
         const topId = json.hotspots?.[0]?.id ?? json.nodes?.[0]?.id;
         setSelectedIds(topId ? [topId] : []);
       }
+
+      setHasStarted(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sunucuya bağlanılamadı.');
     } finally {
@@ -89,8 +94,22 @@ function DominoWorkspace() {
     }
   };
 
-  // Klavye kısayolları: Esc seçimi temizler, F haritayı ortalar
+  const openOfflineDemo = () => {
+    setRepoUrl('https://github.com/dominocode/ecommerce-core');
+    setData(DEMO_ANALYSIS);
+    setSelectedIds(['src/services/authService.ts']);
+    setMultiPrMode(false);
+    setError(null);
+    setHasStarted(true);
+  };
+
+  const goHome = () => {
+    setError(null);
+    setHasStarted(false);
+  };
+
   useEffect(() => {
+    if (!hasStarted) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -103,7 +122,7 @@ function DominoWorkspace() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [fitView]);
+  }, [hasStarted, fitView]);
 
   const { directSet, indirectSet } = useMemo(() => {
     const direct = new Set<string>();
@@ -160,8 +179,10 @@ function DominoWorkspace() {
           lines: n.lines,
           risk: n.risk,
           totalImpact: n.totalImpact,
-          hasCircular: n.circularPartners?.length > 0,
+          hasCircular: Boolean(n.circularPartners?.length),
           impactState,
+          heatmapMode,
+          heat: n.heat,
         },
       };
     });
@@ -187,7 +208,7 @@ function DominoWorkspace() {
             stroke,
             strokeWidth: isRippleEdge || e.isCircular ? 2.4 : 1.3,
             strokeDasharray: e.isCircular ? '6 4' : undefined,
-            opacity: hasSelection && !isRippleEdge && !e.isCircular ? 0.18 : 1,
+            opacity: hasSelection && !isRippleEdge && !e.isCircular && !heatmapMode ? 0.18 : 0.85,
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -200,12 +221,13 @@ function DominoWorkspace() {
       layoutNodes: applyDagreLayout(rawNodes, rawEdges),
       styledEdges: rawEdges,
     };
-  }, [data, isolateImpact, hideIsolated, selectedIds, directSet, indirectSet]);
+  }, [data, isolateImpact, hideIsolated, selectedIds, directSet, indirectSet, heatmapMode]);
 
   useEffect(() => {
+    if (!hasStarted) return;
     const timer = setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 80);
     return () => clearTimeout(timer);
-  }, [data, hideIsolated, isolateImpact, fitView]);
+  }, [hasStarted, data, hideIsolated, isolateImpact, fitView]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: CustomFileNode) => {
@@ -224,7 +246,7 @@ function DominoWorkspace() {
       setSelectedIds([id]);
       const target = layoutNodes.find((n) => n.id === id);
       if (target) {
-        setCenter(target.position.x + 116, target.position.y + 38, { zoom: 1.15, duration: 450 });
+        setCenter(target.position.x + 119, target.position.y + 39, { zoom: 1.15, duration: 450 });
       }
     },
     [layoutNodes, setCenter]
@@ -242,6 +264,19 @@ function DominoWorkspace() {
   const blastPercentage =
     data.repo.totalFiles > 1 ? Math.round((totalImpactedCount / (data.repo.totalFiles - 1)) * 100) : 0;
 
+  if (!hasStarted) {
+    return (
+      <LandingScreen
+        repoUrl={repoUrl}
+        setRepoUrl={setRepoUrl}
+        loading={loading}
+        error={error}
+        onAnalyze={runAnalysis}
+        onOpenOfflineDemo={openOfflineDemo}
+      />
+    );
+  }
+
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 select-none">
       <TopBar
@@ -253,6 +288,9 @@ function DominoWorkspace() {
         prInfo={data.prInfo}
         loading={loading}
         onAnalyze={runAnalysis}
+        onGoHome={goHome}
+        heatmapMode={heatmapMode}
+        setHeatmapMode={setHeatmapMode}
         isolateImpact={isolateImpact}
         setIsolateImpact={setIsolateImpact}
         multiPrMode={multiPrMode}
@@ -285,14 +323,21 @@ function DominoWorkspace() {
             edges={styledEdges}
             nodeTypes={nodeTypes}
             onNodeClick={onNodeClick}
-            colorMode="dark"
             fitView
           >
             <Background color="#27272a" gap={22} />
             <Controls />
             <MiniMap
               nodeColor={(n) => {
-                const state = (n.data as FileNodeData)?.impactState;
+                const d = n.data as FileNodeData;
+                if (d?.heatmapMode) {
+                  const level = d.heat?.heatLevel;
+                  if (level === 'burning') return '#f43f5e';
+                  if (level === 'hot') return '#f97316';
+                  if (level === 'warm') return '#facc15';
+                  return '#38bdf8';
+                }
+                const state = d?.impactState;
                 if (state === 'selected') return '#22d3ee';
                 if (state === 'direct') return '#f43f5e';
                 if (state === 'indirect') return '#f59e0b';
@@ -304,18 +349,37 @@ function DominoWorkspace() {
 
           {/* Alt Renk ve Kısayol Lejantı */}
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 border border-zinc-800/90 rounded-xl px-3.5 py-2 flex items-center gap-4 text-[11px] text-zinc-300 backdrop-blur-md shadow-lg">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" /> Odak Dosya
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> Doğrudan Etki
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Dolaylı Domino
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-purple-400" /> Döngüsel Hata
-            </span>
+            {heatmapMode ? (
+              <>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-sky-400" /> Stabil (Az Değişen)
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Ilık
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-orange-500" /> Sıcak
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> Çok Sıcak (Sık Değişen)
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" /> Odak Dosya
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> Doğrudan Etki
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Dolaylı Domino
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-400" /> Döngüsel Hata
+                </span>
+              </>
+            )}
             <span className="h-3.5 w-px bg-zinc-800 hidden sm:inline-block" />
             <span className="text-zinc-500 hidden sm:inline">
               <kbd className="px-1.5 py-0.5 bg-zinc-950 border border-zinc-800 rounded text-[10px]">F</kbd> Ortala ·{' '}
@@ -328,6 +392,7 @@ function DominoWorkspace() {
           apiUrl={API_URL}
           repoUrl={repoUrl}
           repoName={`${data.repo.owner}/${data.repo.name}`}
+          repoBranch={data.repo.branch}
           healthGrade={data.repo.healthGrade ?? 'B'}
           circularCount={data.repo.circularCount}
           prInfo={data.prInfo}

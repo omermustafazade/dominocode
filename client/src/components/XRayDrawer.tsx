@@ -6,19 +6,25 @@ import {
   CheckCircle2,
   Circle,
   ClipboardCopy,
+  Clock,
   FileCode2,
   FileWarning,
+  GitCommit,
   GitPullRequest,
+  History,
   ListChecks,
   Network,
   Repeat,
   RotateCcw,
   ShieldAlert,
   Sparkles,
+  User,
 } from 'lucide-react';
 import type {
   DominoNode,
+  FileHeatStats,
   HealthGrade,
+  HeatLevel,
   PrInfo,
   PrReviewResponse,
   RiskLevel,
@@ -29,6 +35,7 @@ interface XRayDrawerProps {
   apiUrl: string;
   repoUrl: string;
   repoName: string;
+  repoBranch: string;
   healthGrade: HealthGrade;
   circularCount: number;
   prInfo?: PrInfo;
@@ -53,10 +60,34 @@ const RISK_LABEL: Record<RiskLevel, { text: string; badge: string }> = {
   low: { text: 'DÜŞÜK RİSK', badge: 'bg-zinc-800 text-zinc-300 border-zinc-700' },
 };
 
+const HEAT_LABEL: Record<HeatLevel, { text: string; badge: string }> = {
+  burning: { text: 'ÇOK SICAK', badge: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
+  hot: { text: 'SICAK', badge: 'bg-orange-500/20 text-orange-300 border-orange-500/40' },
+  warm: { text: 'ILIK', badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+  cold: { text: 'STABİL', badge: 'bg-sky-500/20 text-sky-300 border-sky-500/40' },
+};
+
+function formatRelativeTimeTr(isoDate?: string): string {
+  if (!isoDate) return 'Bilinmiyor';
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  if (Number.isNaN(diffMs) || diffMs < 0) return 'Az önce';
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'Az önce';
+  if (mins < 60) return `${mins} dk önce`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} saat önce`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} gün önce`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} ay önce`;
+  return `${Math.floor(months / 12)} yıl önce`;
+}
+
 export function XRayDrawer({
   apiUrl,
   repoUrl,
   repoName,
+  repoBranch,
   healthGrade,
   circularCount,
   prInfo,
@@ -69,9 +100,11 @@ export function XRayDrawer({
 }: XRayDrawerProps) {
   const [xray, setXray] = useState<XRayResponse | null>(null);
   const [prReview, setPrReview] = useState<PrReviewResponse | null>(null);
+  const [fileHeat, setFileHeat] = useState<FileHeatStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [commitsLoading, setCommitsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<'ai' | 'chain'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'chain' | 'commits'>('ai');
   const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({});
 
   const isPrOrMulti = Boolean(prInfo) || selectedNodes.length > 1;
@@ -81,6 +114,7 @@ export function XRayDrawer({
     setCheckedItems({});
   }, [primaryNode?.id]);
 
+  // Tekil dosya AI X-Ray analizi
   useEffect(() => {
     if (!primaryNode) {
       setXray(null);
@@ -97,7 +131,7 @@ export function XRayDrawer({
         repoUrl,
         filePath: primaryNode.id,
         directDependents: primaryNode.directDependents,
-        circularPartners: primaryNode.circularPartners,
+        circularPartners: primaryNode.circularPartners ?? [],
         totalImpact: primaryNode.totalImpact,
       }),
     })
@@ -116,8 +150,8 @@ export function XRayDrawer({
               'Null / undefined dönüş durumlarını kontrol et.',
             ],
             circularFix:
-              primaryNode.circularPartners.length > 0
-                ? `${primaryNode.label} ile ${primaryNode.circularPartners.join(', ')} arasındaki ortak tipleri ayrı bir types.ts dosyasına çıkararak döngüyü kırın.`
+              (primaryNode.circularPartners ?? []).length > 0
+                ? `${primaryNode.label} ile ${(primaryNode.circularPartners ?? []).join(', ')} arasındaki ortak tipleri ayrı bir types.ts dosyasına çıkararak döngüyü kırın.`
                 : undefined,
           });
         }
@@ -131,6 +165,47 @@ export function XRayDrawer({
     };
   }, [apiUrl, repoUrl, primaryNode]);
 
+  // Seçili dosyanın Git Commit ve Yazar geçmişi
+  useEffect(() => {
+    if (!primaryNode) {
+      setFileHeat(null);
+      return;
+    }
+
+    if (primaryNode.heat && primaryNode.heat.recentCommits.length > 0) {
+      setFileHeat(primaryNode.heat);
+      return;
+    }
+
+    let cancelled = false;
+    setCommitsLoading(true);
+
+    fetch(`${apiUrl}/api/file-commits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repoUrl,
+        branch: repoBranch,
+        filePath: primaryNode.id,
+      }),
+    })
+      .then((res) => res.json())
+      .then((stats: FileHeatStats) => {
+        if (!cancelled) setFileHeat(stats);
+      })
+      .catch(() => {
+        if (!cancelled) setFileHeat(primaryNode.heat ?? null);
+      })
+      .finally(() => {
+        if (!cancelled) setCommitsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl, repoUrl, repoBranch, primaryNode]);
+
+  // Çoklu PR analizi
   useEffect(() => {
     if (!isPrOrMulti || selectedNodes.length === 0) {
       setPrReview(null);
@@ -209,13 +284,18 @@ export function XRayDrawer({
       md = [
         `### DominoCode X-Ray Raporu: \`${primaryNode.id}\``,
         `**Risk Seviyesi:** ${primaryNode.risk.toUpperCase()} | **Etki Alanı:** %${blastPercentage} (${primaryNode.totalImpact} dosya) | **Mimari Sağlık:** ${healthGrade}`,
+        fileHeat
+          ? `**Son Güncelleme:** ${fileHeat.lastAuthor} (${formatRelativeTimeTr(fileHeat.lastModified)})`
+          : '',
         ``,
         `**Modül Görevi:** ${xray?.summary ?? ''}`,
         `**Neden Riskli?** ${xray?.riskReason ?? ''}`,
         ``,
         `**Merge Öncesi Kontrol Listesi:**`,
         ...(xray?.checklist.map((item) => `- [ ] ${item}`) ?? []),
-      ].join('\n');
+      ]
+        .filter(Boolean)
+        .join('\n');
     }
 
     if (!md) return;
@@ -232,11 +312,11 @@ export function XRayDrawer({
         </div>
         <div className="text-sm font-semibold text-zinc-200">AI X-Ray Hazır</div>
         <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed max-w-[230px]">
-          Haritadan herhangi bir dosyaya tıklayarak mimari görevini, domino zincirini ve risk analizini inceleyin.
+          Haritadan herhangi bir dosyaya tıklayarak mimari görevini, domino zincirini ve commit geçmişini inceleyin.
         </p>
         <div className="mt-5 w-full bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-3 text-left space-y-2 text-[11px] text-zinc-400">
           <div className="font-semibold text-zinc-300">Hızlı İpuçları</div>
-          <div>• Tek tıklama ile dosyanın etki dalgasını görün.</div>
+          <div>• Üstten <span className="text-orange-300">Isı Haritası</span> açarak en sık değişen dosyaları görün.</div>
           <div>• Üstten <span className="text-amber-300">Çoklu PR</span> açıp birden fazla dosya seçin.</div>
           <div>• <span className="text-cyan-300">Esc</span> tuşu ile seçimi sıfırlayın.</div>
         </div>
@@ -250,7 +330,6 @@ export function XRayDrawer({
 
   const renderImpactChain = () => (
     <div className="space-y-3">
-      {/* Doğrudan Etkilenenler */}
       <div className="bg-zinc-900/85 border border-zinc-800 rounded-xl p-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] font-bold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
@@ -278,7 +357,6 @@ export function XRayDrawer({
         )}
       </div>
 
-      {/* Dolaylı Domino Etkisi */}
       <div className="bg-zinc-900/85 border border-zinc-800 rounded-xl p-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
@@ -308,10 +386,101 @@ export function XRayDrawer({
     </div>
   );
 
+  const renderCommitHistory = () => {
+    if (commitsLoading) {
+      return (
+        <div className="space-y-2.5 animate-pulse">
+          <div className="h-16 bg-zinc-900 rounded-xl" />
+          <div className="h-20 bg-zinc-900 rounded-xl" />
+          <div className="h-20 bg-zinc-900 rounded-xl" />
+        </div>
+      );
+    }
+
+    const commits = fileHeat?.recentCommits ?? [];
+    const heatMeta = HEAT_LABEL[fileHeat?.heatLevel ?? 'cold'];
+
+    return (
+      <div className="space-y-3">
+        {/* Son Değiştiren Kişi ve Sıcaklık Özeti */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold uppercase text-zinc-400">
+              Dosya Sıcaklığı & Sahiplik
+            </span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${heatMeta.badge}`}>
+              {heatMeta.text}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between text-xs mt-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-full bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-300 font-bold text-xs shrink-0">
+                {(fileHeat?.lastAuthor ?? 'G')[0].toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <div className="font-semibold text-zinc-100 truncate">
+                  {fileHeat?.lastAuthor ?? 'Bilinmiyor'}
+                </div>
+                <div className="text-[10px] text-zinc-500 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  <span>{formatRelativeTimeTr(fileHeat?.lastModified)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-right shrink-0">
+              <div className="text-sm font-black text-orange-400">
+                {fileHeat?.commitCount ?? 0}
+              </div>
+              <div className="text-[10px] text-zinc-500">son commit</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Commit Listesi */}
+        <div className="space-y-2">
+          <div className="text-[11px] font-semibold uppercase text-zinc-400 px-0.5">
+            Son Değişiklik Geçmişi ({commits.length})
+          </div>
+
+          {commits.length === 0 ? (
+            <div className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 text-xs text-zinc-500 text-center">
+              Bu dosya için commit kaydı bulunamadı.
+            </div>
+          ) : (
+            commits.map((c) => (
+              <div
+                key={c.sha + c.date}
+                className="bg-zinc-900/90 border border-zinc-800/90 rounded-xl p-2.5 space-y-1.5"
+              >
+                <div className="text-xs text-zinc-200 font-medium leading-snug">
+                  {c.message}
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1 border-t border-zinc-800/70">
+                  <span className="flex items-center gap-1 font-medium text-zinc-300 truncate max-w-[130px]">
+                    <User className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span className="truncate">{c.author}</span>
+                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0 font-mono text-zinc-500">
+                    <span>{formatRelativeTimeTr(c.date)}</span>
+                    <span className="bg-zinc-950 border border-zinc-800 px-1.5 py-0.5 rounded text-zinc-400 flex items-center gap-0.5">
+                      <GitCommit className="w-2.5 h-2.5" />
+                      {c.sha}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (isPrOrMulti) {
     return (
       <aside className="w-88 border-l border-zinc-800/90 bg-zinc-950/90 p-3.5 flex flex-col gap-3 overflow-hidden shrink-0">
-        {/* Üst Başlık */}
         <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-bold uppercase tracking-wider">
             {prInfo ? <GitPullRequest className="w-4 h-4" /> : <FileWarning className="w-4 h-4" />}
@@ -342,7 +511,6 @@ export function XRayDrawer({
           </div>
         )}
 
-        {/* 3'lü Etki Özeti */}
         <div className="grid grid-cols-3 gap-2 shrink-0">
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-2.5 text-center">
             <div className="text-[10px] text-zinc-500 font-semibold">ETKİ ALANI</div>
@@ -358,7 +526,6 @@ export function XRayDrawer({
           </div>
         </div>
 
-        {/* Sekme Geçişi */}
         <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 shrink-0">
           <button
             type="button"
@@ -485,7 +652,14 @@ export function XRayDrawer({
             {node.lines} satır
           </span>
         </div>
-        <div className="text-[11px] font-mono text-zinc-500 mt-1 truncate">{node.id}</div>
+        <div className="flex items-center justify-between text-[11px] text-zinc-500 mt-1.5 gap-2">
+          <span className="font-mono truncate">{node.id}</span>
+          {fileHeat && (
+            <span className="text-[10px] text-zinc-400 shrink-0">
+              {fileHeat.lastAuthor} · {formatRelativeTimeTr(fileHeat.lastModified)}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 3'lü Etki Özeti */}
@@ -504,12 +678,12 @@ export function XRayDrawer({
         </div>
       </div>
 
-      {/* AI Analiz vs Domino Zinciri Sekmesi */}
-      <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 shrink-0">
+      {/* 3 Sekmeli Geçiş: AI Teşhis / Etkilenenler / Commitler */}
+      <div className="grid grid-cols-3 gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 shrink-0">
         <button
           type="button"
           onClick={() => setActiveTab('ai')}
-          className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition ${
+          className={`py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer transition ${
             activeTab === 'ai' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
           }`}
         >
@@ -519,20 +693,34 @@ export function XRayDrawer({
         <button
           type="button"
           onClick={() => setActiveTab('chain')}
-          className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition ${
+          className={`py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer transition ${
             activeTab === 'chain'
               ? 'bg-zinc-800 text-zinc-100'
               : 'text-zinc-500 hover:text-zinc-300'
           }`}
         >
           <Network className="w-3.5 h-3.5 text-rose-400" />
-          Etkilenenler ({directList.length + indirectList.length})
+          Etki ({directList.length + indirectList.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('commits')}
+          className={`py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer transition ${
+            activeTab === 'commits'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <History className="w-3.5 h-3.5 text-orange-400" />
+          Commitler
         </button>
       </div>
 
       {/* İçerik Alanı */}
       <div className="flex-1 overflow-y-auto space-y-3 pr-0.5">
-        {activeTab === 'chain' ? (
+        {activeTab === 'commits' ? (
+          renderCommitHistory()
+        ) : activeTab === 'chain' ? (
           renderImpactChain()
         ) : loading ? (
           <div className="space-y-2.5 animate-pulse">

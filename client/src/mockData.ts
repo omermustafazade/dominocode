@@ -1,5 +1,8 @@
 import type { AnalysisResponse } from './types';
 
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3600 * 1000).toISOString();
+const daysAgo = (d: number) => new Date(Date.now() - d * 24 * 3600 * 1000).toISOString();
+
 export const DEMO_ANALYSIS: AnalysisResponse = {
   repo: {
     owner: 'dominocode',
@@ -7,6 +10,8 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
     branch: 'main',
     totalFiles: 9,
     circularCount: 1,
+    healthScore: 72,
+    healthGrade: 'B',
   },
   hotspots: [
     { id: 'src/services/authService.ts', label: 'authService.ts', directCount: 2, totalImpact: 5, risk: 'critical' },
@@ -23,7 +28,20 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'critical',
       directDependents: ['src/api/apiClient.ts', 'src/store/userStore.ts'],
       indirectDependents: ['src/services/paymentService.ts', 'src/pages/LoginPage.tsx', 'src/pages/CheckoutPage.tsx'],
+      circularPartners: ['src/api/apiClient.ts'],
       totalImpact: 5,
+      heat: {
+        commitCount: 9,
+        heatScore: 95,
+        heatLevel: 'burning',
+        lastAuthor: 'Ömer Mustafazade',
+        lastModified: hoursAgo(2),
+        recentCommits: [
+          { sha: '9f4a21c', message: 'feat(auth): refresh token yenileme akisi eklendi', author: 'Ömer Mustafazade', date: hoursAgo(2) },
+          { sha: '4c18e0b', message: 'fix(auth): oturum suresi dolunca interceptor dongusu', author: 'Hatice Çevik', date: daysAgo(1) },
+          { sha: '1a87d92', message: 'refactor(auth): jwt payload dogrulama yardimcisi', author: 'Ömer Mustafazade', date: daysAgo(4) },
+        ],
+      },
     },
     {
       id: 'src/api/apiClient.ts',
@@ -34,7 +52,19 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'critical',
       directDependents: ['src/services/authService.ts', 'src/services/paymentService.ts', 'src/store/userStore.ts'],
       indirectDependents: ['src/pages/LoginPage.tsx', 'src/pages/CheckoutPage.tsx'],
+      circularPartners: ['src/services/authService.ts'],
       totalImpact: 5,
+      heat: {
+        commitCount: 7,
+        heatScore: 82,
+        heatLevel: 'burning',
+        lastAuthor: 'Hatice Çevik',
+        lastModified: hoursAgo(5),
+        recentCommits: [
+          { sha: '7e21b4a', message: 'feat(api): 401 yanitlarinda otomatik retry mekanizmasi', author: 'Hatice Çevik', date: hoursAgo(5) },
+          { sha: '3d90c11', message: 'chore(api): baseURL ortam degiskeni yapilandirmasi', author: 'Ömer Mustafazade', date: daysAgo(3) },
+        ],
+      },
     },
     {
       id: 'src/utils/logger.ts',
@@ -51,7 +81,18 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
         'src/pages/LoginPage.tsx',
         'src/pages/CheckoutPage.tsx',
       ],
+      circularPartners: [],
       totalImpact: 6,
+      heat: {
+        commitCount: 2,
+        heatScore: 24,
+        heatLevel: 'cold',
+        lastAuthor: 'Ömer Mustafazade',
+        lastModified: daysAgo(45),
+        recentCommits: [
+          { sha: '0b54a19', message: 'chore(logger): json formatli hata ciktilari', author: 'Ömer Mustafazade', date: daysAgo(45) },
+        ],
+      },
     },
     {
       id: 'src/store/userStore.ts',
@@ -62,7 +103,19 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'high',
       directDependents: ['src/pages/LoginPage.tsx', 'src/pages/ProfilePage.tsx'],
       indirectDependents: [],
+      circularPartners: [],
       totalImpact: 2,
+      heat: {
+        commitCount: 5,
+        heatScore: 58,
+        heatLevel: 'hot',
+        lastAuthor: 'Hatice Çevik',
+        lastModified: daysAgo(2),
+        recentCommits: [
+          { sha: '8a12f33', message: 'feat(store): kullanici rol ve yetki durumu eklendi', author: 'Hatice Çevik', date: daysAgo(2) },
+          { sha: '5f09e21', message: 'fix(store): cikis yapildiginda state sifirlama', author: 'Hatice Çevik', date: daysAgo(6) },
+        ],
+      },
     },
     {
       id: 'src/services/paymentService.ts',
@@ -73,7 +126,19 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'medium',
       directDependents: ['src/pages/CheckoutPage.tsx'],
       indirectDependents: [],
+      circularPartners: [],
       totalImpact: 1,
+      heat: {
+        commitCount: 6,
+        heatScore: 66,
+        heatLevel: 'hot',
+        lastAuthor: 'Ömer Mustafazade',
+        lastModified: daysAgo(1),
+        recentCommits: [
+          { sha: '6d44c8e', message: 'feat(payment): 3D Secure odeme dogrulama adimi', author: 'Ömer Mustafazade', date: daysAgo(1) },
+          { sha: '2b71a09', message: 'fix(payment): sepet tutari kurus yuvarlama hatasi', author: 'Hatice Çevik', date: daysAgo(5) },
+        ],
+      },
     },
     {
       id: 'src/pages/LoginPage.tsx',
@@ -84,7 +149,18 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'low',
       directDependents: [],
       indirectDependents: [],
+      circularPartners: [],
       totalImpact: 0,
+      heat: {
+        commitCount: 4,
+        heatScore: 40,
+        heatLevel: 'warm',
+        lastAuthor: 'Hatice Çevik',
+        lastModified: daysAgo(9),
+        recentCommits: [
+          { sha: 'c91e402', message: 'ui(login): form dogrulama ve hata mesajlari yenilendi', author: 'Hatice Çevik', date: daysAgo(9) },
+        ],
+      },
     },
     {
       id: 'src/pages/CheckoutPage.tsx',
@@ -95,7 +171,18 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'low',
       directDependents: [],
       indirectDependents: [],
+      circularPartners: [],
       totalImpact: 0,
+      heat: {
+        commitCount: 5,
+        heatScore: 52,
+        heatLevel: 'hot',
+        lastAuthor: 'Hatice Çevik',
+        lastModified: daysAgo(3),
+        recentCommits: [
+          { sha: 'e42b19d', message: 'ui(checkout): adres secimi ve siparis ozeti karti', author: 'Hatice Çevik', date: daysAgo(3) },
+        ],
+      },
     },
     {
       id: 'src/pages/ProfilePage.tsx',
@@ -106,7 +193,18 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'low',
       directDependents: [],
       indirectDependents: [],
+      circularPartners: [],
       totalImpact: 0,
+      heat: {
+        commitCount: 2,
+        heatScore: 22,
+        heatLevel: 'cold',
+        lastAuthor: 'Ömer Mustafazade',
+        lastModified: daysAgo(34),
+        recentCommits: [
+          { sha: 'a17f83c', message: 'ui(profile): profil bilgi duzenleme ekrani', author: 'Ömer Mustafazade', date: daysAgo(34) },
+        ],
+      },
     },
     {
       id: 'src/utils/formatDate.ts',
@@ -117,7 +215,18 @@ export const DEMO_ANALYSIS: AnalysisResponse = {
       risk: 'medium',
       directDependents: ['src/pages/ProfilePage.tsx'],
       indirectDependents: [],
+      circularPartners: [],
       totalImpact: 1,
+      heat: {
+        commitCount: 1,
+        heatScore: 12,
+        heatLevel: 'cold',
+        lastAuthor: 'Ömer Mustafazade',
+        lastModified: daysAgo(60),
+        recentCommits: [
+          { sha: 'f03d11a', message: 'chore(utils): turkce tarih bicimlendirici', author: 'Ömer Mustafazade', date: daysAgo(60) },
+        ],
+      },
     },
   ],
   edges: [
